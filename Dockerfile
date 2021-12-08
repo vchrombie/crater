@@ -1,8 +1,10 @@
 FROM php:7.4-fpm
 
-# Arguments defined in docker-compose.yml
-ARG user
-ARG uid
+# Set working directory
+WORKDIR /var/www
+
+# Copy php configurations
+COPY ./docker-compose/php/uploads.ini /usr/local/etc/php/conf.d/uploads.ini
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -24,17 +26,16 @@ RUN pecl install imagick \
     && docker-php-ext-enable imagick
 
 # Install PHP extensions
+RUN rmdir html
 RUN docker-php-ext-install pdo_mysql mbstring zip exif pcntl bcmath gd
 
-# Get latest Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Create system user to run Composer and Artisan Commands
-RUN useradd -G www-data,root -u $uid -d /home/$user $user
-RUN mkdir -p /home/$user/.composer && \
-    chown -R $user:$user /home/$user
+RUN useradd -G www-data,root -u 1000 -d /home/crater crater
+RUN chmod 777 /var/www/ && chown 1000:1000 /var/www/
 
-# Set working directory
-WORKDIR /var/www
+USER 0
 
-USER $user
+COPY ./docker-compose/startup.sh /startup.sh
+
+CMD ["/startup.sh"]
