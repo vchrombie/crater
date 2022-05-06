@@ -1,0 +1,43 @@
+name: Build and Publish Crater
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - "**.md"
+  repository_dispatch:
+    types: ["default-config-trigger"]
+
+env:
+  CRATER_VERSION: 1.0.0
+
+jobs:
+  docker-build-publish:
+    runs-on: ubuntu-latest
+    name: Docker Build & Publish
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+
+    - name: Login to DockerHub
+      uses: docker/login-action@v1
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+    - name: Docker Build and push crater-php
+      uses: docker/build-push-action@v2
+      with:
+        context: .
+        file: docker/Dockerfile
+        push: true
+        tags: bahmni/crater-php:${{env.CRATER_VERSION}}-${{github.run_number}},bahmni/crater-php:latest
+
+    - name: Docker Build and push crater-nginx
+      uses: docker/build-push-action@v2
+      with:
+        context: .
+        file: docker/nginx.Dockerfile
+        push: true
+        tags: bahmni/crater-nginx:${{env.CRATER_VERSION}}-${{github.run_number}},bahmni/crater-nginx:latest
