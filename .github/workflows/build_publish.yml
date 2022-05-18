@@ -2,19 +2,47 @@ name: Build and Publish Crater
 
 on:
   push:
-    branches: [master]
+    branches: [ master ]
     paths-ignore:
       - "**.md"
-  repository_dispatch:
-    types: ["default-config-trigger"]
-
-env:
-  CRATER_VERSION: 1.0.0
+      - ".github/workflows/ci.yml"
+      - "docker/**"
 
 jobs:
+  get-version:
+    # This job reads the .baseversion file and checks it against tags in the repo so that overlap builds don't occur.
+    # Also provides version as output for other jobs.
+    name: Get Version
+    runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.get-version.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Set Version Output
+        id: get-version
+        run: |
+          VERSION=$(cat package/.appversion)
+          if [ $(git tag -l "$VERSION") ]; then
+            echo "Version $VERSION already released. Please update your version in package/.appversion"
+            exit 1
+          else
+            echo "Setting version $VERSION-${{github.run_number}}"
+            echo ::set-output name=version::$VERSION-${{github.run_number}}"
+          fi
+
   docker-build-publish:
     runs-on: ubuntu-latest
     name: Docker Build & Publish
+
+    needs: [ get-version ]
+    env:
+      ARTIFACT_VERSION: ${{ needs.get-version.outputs.version }}
 
     steps:
     - name: Checkout
@@ -32,7 +60,7 @@ jobs:
         context: .
         file: docker/Dockerfile
         push: true
-        tags: bahmni/crater-php:${{env.CRATER_VERSION}}-${{github.run_number}},bahmni/crater-php:latest
+        tags: bahmni/crater-php:${{ env.ARTIFACT_VERSION }},bahmni/crater-php:latest
 
     - name: Docker Build and push crater-nginx
       uses: docker/build-push-action@v2
@@ -40,4 +68,58 @@ jobs:
         context: .
         file: docker/nginx.Dockerfile
         push: true
-        tags: bahmni/crater-nginx:${{env.CRATER_VERSION}}-${{github.run_number}},bahmni/crater-nginx:latest
+        tags: bahmni/crater-nginx:${{ env.ARTIFACT_VERSION }},bahmni/crater-nginx:latest
+
+  helm-package-publish:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+
+    name: Helm Package & Publish Crater
+
+    needs: [ get-version, docker-build-publish ]
+    env:
+      ARTIFACT_VERSION: ${{ needs.get-version.outputs.version }}
+      HELM_CHART_PATH: crater/package/helm/crater
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          path: crater
+
+      - name: Update Version and Image Tag
+        run: |
+          yq --inplace '.image.tag = "${{ env.ARTIFACT_VERSION }}"' $HELM_CHART_PATH/values.yaml
+          yq --inplace '.version = "${{ env.ARTIFACT_VERSION }}"' $HELM_CHART_PATH/Chart.yaml
+
+      - name: Helm Lint
+        run: helm lint $HELM_CHART_PATH
+
+      - name: Helm Package
+        run: helm package $HELM_CHART_PATH
+
+      - name: Checkout Charts Repository
+        uses: actions/checkout@v2
+        with:
+          repository: Bahmni/helm-charts
+          ref: gh-pages
+          path: helm-charts
+          persist-credentials: false
+
+      - name: Copy Helm Archive
+        run: cp crater-${{ env.ARTIFACT_VERSION }}.tgz helm-charts/crater/
+
+      - name: Helm Index
+        working-directory: helm-charts/
+        run: helm repo index --merge index.yaml --url https://bahmni.github.io/helm-charts/  .
+
+      - name: Commit and Push Chart Repository
+        working-directory: helm-charts/
+        run: |
+          git config user.name ${{ secrets.BAHMNI_USERNAME}}
+          git config user.email ${{ secrets.BAHMNI_EMAIL}}
+          git add .
+          git commit -m "Release of crater-${{ env.ARTIFACT_VERSION }}"
+          git push 'https://${{ secrets.BAHMNI_USERNAME}}:${{ secrets.BAHMNI_PAT}}@github.com/bahmni/helm-charts.git' gh-pages
