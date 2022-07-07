@@ -4,12 +4,12 @@ on:
   push:
     branches:
       - bahmni-master
+      - fix-ci
     tags:
       - "v*.**"
   pull_request:
     branches:
       - bahmni-master
-      - fix-ci
 env:
   CRATER_VERSION: 1.0.0
 jobs:
